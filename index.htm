@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>炎と氷の舞 - Web Rhythm Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #111;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; /* スマホでのスクロールを防止 */
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            transition: opacity 0.3s;
+            z-index: 10;
+        }
+        .hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .glow-text {
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px rgba(255, 255, 255, 0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- UI Overlays -->
+    <div id="ui-menu" class="overlay">
+        <h1 class="text-5xl font-bold mb-4 glow-text tracking-wider">炎と氷の舞</h1>
+        <p class="text-xl mb-8 text-gray-300">A Dance of Fire and Ice Clone</p>
+        <p class="text-lg animate-pulse">画面タップ または スペースキーで開始</p>
+    </div>
+
+    <div id="ui-gameover" class="overlay hidden">
+        <h1 class="text-5xl font-bold mb-4 text-red-500 glow-text">ゲームオーバー</h1>
+        <p id="result-combo" class="text-2xl mb-8">コンボ: 0</p>
+        <p class="text-lg animate-pulse">タップ または スペースキーでリトライ</p>
+    </div>
+
+    <div id="ui-clear" class="overlay hidden">
+        <h1 class="text-6xl font-bold mb-4 text-yellow-400 glow-text">クリア！</h1>
+        <p class="text-2xl mb-8">全ステージ踏破</p>
+        <p class="text-lg animate-pulse">タップ または スペースキーでリスタート</p>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud" class="absolute top-4 left-4 text-white text-2xl font-bold z-0 opacity-0 transition-opacity">
+        Combo: <span id="combo-counter">0</span>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- Audio System ---
+        let audioCtx;
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playTick() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        function playMiss() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }
+
+        function playCountdownTick() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(440, audioCtx.currentTime); // ラの音
+            osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        function playCountdownStart() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime); // 1オクターブ高いラの音
+            osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }
+
+        // --- Game Logic & Variables ---
+        const TILE_SIZE = 80;
+        let state = 'menu'; // menu, countdown, playing, gameover, clear
+        let path = [];
+        let currentIndex = 0;
+        
+        let countdownValue = 3;
+        let countdownTimer = 0;
+        
+        let currentAngle = 180;
+        let startAngle = 180;
+        let targetAngle = 360;
+        
+        const ORB_FIRE = { color: '#ff3366', shadow: '#ff0000' };
+        const ORB_ICE = { color: '#33ccff', shadow: '#0066ff' };
+        let anchorOrb = ORB_FIRE;
+        let movingOrb = ORB_ICE;
+        
+        let rotationSpeed = 480; // 回転速度（度/秒） - リズムの速さ（320から480に変更して高速化）
+        let camera = { x: 0, y: 0 };
+        let combo = 0;
+        let lastTime = 0;
+        
+        let floatingTexts = [];
+        let trails = [];
+
+        // ステージの生成 (R:右, D:下, L:左, U:上)
+        // 難易度を上げるため、ステージを大幅に長くし、ジグザグやUターンなどの複雑なルートを追加
+        const levelString = "R R R U R U L U R R D R U R R R D D L D R R U R U U R D R D D R R R U R D R U R D R U U L L D D R R R R".split(' ');
+
+        function initGame() {
+            path = [];
+            let cx = 0, cy = 0;
+            path.push({x: cx, y: cy}); // 開始タイル
+            
+            for(let dir of levelString) {
+                if(dir === 'R') cx++;
+                else if(dir === 'L') cx--;
+                else if(dir === 'D') cy++;
+                else if(dir === 'U') cy--;
+                path.push({x: cx, y: cy});
+            }
+
+            currentIndex = 0;
+            combo = 0;
+            anchorOrb = ORB_FIRE;
+            movingOrb = ORB_ICE;
+            
+            // 最初の状態をセット (左から右へ入ってくる想定)
+            startAngle = 180;
+            targetAngle = 360;
+            currentAngle = 180;
+            
+            camera.x = path[0].x * TILE_SIZE;
+            camera.y = path[0].y * TILE_SIZE;
+            
+            floatingTexts = [];
+            trails = [];
+            document.getElementById('combo-counter').innerText = combo;
+        }
+
+        function setUI(menu, gameover, clear, hud) {
+            document.getElementById('ui-menu').className = menu ? 'overlay' : 'overlay hidden';
+            document.getElementById('ui-gameover').className = gameover ? 'overlay' : 'overlay hidden';
+            document.getElementById('ui-clear').className = clear ? 'overlay' : 'overlay hidden';
+            document.getElementById('hud').style.opacity = hud ? '1' : '0';
+        }
+
+        function changeState(newState) {
+            state = newState;
+            if (state === 'menu') {
+                setUI(true, false, false, false);
+                initGame();
+            } else if (state === 'countdown') {
+                initGame();
+                initAudio();
+                setUI(false, false, false, true);
+                countdownValue = 3;
+                countdownTimer = 1.0;
+                playCountdownTick();
+            } else if (state === 'playing') {
+                setUI(false, false, false, true);
+                playCountdownStart(); // スタート時の音
+            } else if (state === 'gameover') {
+                playMiss();
+                document.getElementById('result-combo').innerText = `コンボ: ${combo}`;
+                setUI(false, true, false, false);
+            } else if (state === 'clear') {
+                setUI(false, false, true, false);
+            }
+        }
+
+        function advanceToNextTile() {
+            currentIndex++;
+            combo++;
+            document.getElementById('combo-counter').innerText = combo;
+
+            if (currentIndex >= path.length - 1) {
+                changeState('clear');
+                return;
+            }
+
+            // 球の色をスワップ
+            let temp = anchorOrb;
+            anchorOrb = movingOrb;
+            movingOrb = temp;
+
+            let currentTile = path[currentIndex];
+            let nextTile = path[currentIndex + 1];
+            let prevTile = path[currentIndex - 1];
+
+            // 動く球が現在いる角度（前のタイルからの角度）
+            let dxPrev = prevTile.x - currentTile.x;
+            let dyPrev = prevTile.y - currentTile.y;
+            startAngle = Math.atan2(dyPrev, dxPrev) * 180 / Math.PI;
+            if (startAngle < 0) startAngle += 360;
+
+            // 次のタイルへの角度
+            let dxNext = nextTile.x - currentTile.x;
+            let dyNext = nextTile.y - currentTile.y;
+            let nextAngle = Math.atan2(dyNext, dxNext) * 180 / Math.PI;
+            if (nextAngle < 0) nextAngle += 360;
+
+            // 時計回りの回転量を計算
+            let deltaAngle = nextAngle - startAngle;
+            if (deltaAngle <= 0) deltaAngle += 360;
+
+            targetAngle = startAngle + deltaAngle;
+            currentAngle = startAngle; // スナップしてズレをリセット
+        }
+
+        function spawnFloatingText(text, color, x, y) {
+            floatingTexts.push({ text, color, x, y, life: 1.0 });
+        }
+
+        function handleInput() {
+            initAudio();
+
+            if (state === 'countdown') {
+                return; // カウントダウン中は入力を無視
+            }
+
+            if (state === 'menu' || state === 'gameover' || state === 'clear') {
+                changeState('countdown');
+                return;
+            }
+
+            if (state === 'playing') {
+                let error = Math.abs(currentAngle - targetAngle);
+                
+                // 判定ウィンドウ (45度以内ならヒット)
+                if (error < 45) {
+                    let text = "Late";
+                    let color = "#ff9900";
+                    if (error < 15) { text = "Perfect!"; color = "#00ff00"; }
+                    else if (currentAngle < targetAngle) { text = "Early"; color = "#ffff00"; }
+                    
+                    // 現在の動く球の画面座標を計算してテキストを表示
+                    let cx = width / 2;
+                    let cy = height / 2;
+                    let orbX = cx + Math.cos(targetAngle * Math.PI / 180) * TILE_SIZE;
+                    let orbY = cy + Math.sin(targetAngle * Math.PI / 180) * TILE_SIZE;
+                    spawnFloatingText(text, color, orbX, orbY - 40);
+
+                    playTick();
+                    advanceToNextTile();
+                } else {
+                    // 空振り or フライング
+                    changeState('gameover');
+                }
+            }
+        }
+
+        // 入力イベントリスナー
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.code === 'Enter') {
+                e.preventDefault();
+                handleInput();
+            }
+        });
+        window.addEventListener('pointerdown', handleInput);
+
+        // --- Game Loop ---
+        function update(dt) {
+            if (state === 'countdown') {
+                countdownTimer -= dt;
+                if (countdownTimer <= 0) {
+                    countdownValue--;
+                    if (countdownValue > 0) {
+                        countdownTimer = 1.0;
+                        playCountdownTick();
+                    } else {
+                        changeState('playing');
+                    }
+                }
+            }
+
+            if (state === 'playing') {
+                currentAngle += rotationSpeed * dt;
+
+                // 通り過ぎたかチェック (ミス)
+                if (currentAngle > targetAngle + 45) {
+                    changeState('gameover');
+                }
+
+                // トレイルの追加
+                if (currentIndex < path.length) {
+                    let cx = path[currentIndex].x * TILE_SIZE;
+                    let cy = path[currentIndex].y * TILE_SIZE;
+                    let ox = cx + Math.cos(currentAngle * Math.PI / 180) * TILE_SIZE;
+                    let oy = cy + Math.sin(currentAngle * Math.PI / 180) * TILE_SIZE;
+                    trails.push({ x: ox, y: oy, color: movingOrb.color, life: 1.0 });
+                }
+            }
+
+            // カメラの追尾
+            if (path[currentIndex]) {
+                let targetCamX = path[currentIndex].x * TILE_SIZE;
+                let targetCamY = path[currentIndex].y * TILE_SIZE;
+                camera.x += (targetCamX - camera.x) * 15 * dt;
+                camera.y += (targetCamY - camera.y) * 15 * dt;
+            }
+
+            // パーティクル/テキストの更新
+            floatingTexts.forEach(ft => ft.life -= dt * 1.5);
+            floatingTexts = floatingTexts.filter(ft => ft.life > 0);
+            
+            trails.forEach(t => t.life -= dt * 4);
+            trails = trails.filter(t => t.life > 0);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, width, height);
+
+            let offsetX = width / 2 - camera.x;
+            let offsetY = height / 2 - camera.y;
+
+            // 背景のグリッド風装飾
+            ctx.strokeStyle = '#222';
+            ctx.lineWidth = 2;
+            let gridSize = TILE_SIZE;
+            let startX = (offsetX % gridSize) - gridSize;
+            let startY = (offsetY % gridSize) - gridSize;
+            ctx.beginPath();
+            for (let x = startX; x < width; x += gridSize) { ctx.moveTo(x, 0); ctx.lineTo(x, height); }
+            for (let y = startY; y < height; y += gridSize) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
+            ctx.stroke();
+
+            // パス（線）の描画
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.lineWidth = 10;
+            ctx.lineJoin = 'round';
+            for (let i = 0; i < path.length; i++) {
+                let px = offsetX + path[i].x * TILE_SIZE;
+                let py = offsetY + path[i].y * TILE_SIZE;
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+
+            // タイルの描画
+            for (let i = 0; i < path.length; i++) {
+                let px = offsetX + path[i].x * TILE_SIZE;
+                let py = offsetY + path[i].y * TILE_SIZE;
+                
+                // すでに通過したタイルは暗くする
+                if (i < currentIndex) {
+                    ctx.fillStyle = 'rgba(100, 100, 100, 0.3)';
+                } else if (i === currentIndex) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'; // 現在のタイル
+                } else {
+                    ctx.fillStyle = 'rgba(200, 200, 200, 0.6)'; // 未到達
+                }
+
+                ctx.fillRect(px - TILE_SIZE/2 + 5, py - TILE_SIZE/2 + 5, TILE_SIZE - 10, TILE_SIZE - 10);
+                
+                // 中心点
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(px, py, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // トレイルの描画
+            trails.forEach(t => {
+                ctx.globalAlpha = t.life * 0.5;
+                ctx.fillStyle = t.color;
+                ctx.beginPath();
+                ctx.arc(offsetX + t.x, offsetY + t.y, 10 * t.life, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1.0;
+
+            // 球体の描画
+            if (path[currentIndex]) {
+                let anchorX = offsetX + path[currentIndex].x * TILE_SIZE;
+                let anchorY = offsetY + path[currentIndex].y * TILE_SIZE;
+                
+                let movingX = anchorX + Math.cos(currentAngle * Math.PI / 180) * TILE_SIZE;
+                let movingY = anchorY + Math.sin(currentAngle * Math.PI / 180) * TILE_SIZE;
+
+                // 動く球
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = movingOrb.shadow;
+                ctx.fillStyle = movingOrb.color;
+                ctx.beginPath();
+                ctx.arc(movingX, movingY, 15, 0, Math.PI * 2);
+                ctx.fill();
+
+                // アンカー球 (中心)
+                ctx.shadowColor = anchorOrb.shadow;
+                ctx.fillStyle = anchorOrb.color;
+                
+                // リズムに合わせて少し明滅・拡大させる
+                let pulse = (state === 'playing') ? 1 + Math.sin(Date.now() / 100) * 0.1 : 1;
+                
+                ctx.beginPath();
+                ctx.arc(anchorX, anchorY, 15 * pulse, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0; // リセット
+            }
+
+            // フローティングテキスト（Perfect, Early 等）
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'alphabetic'; // デフォルトに戻す
+            ctx.font = 'bold 24px Arial';
+            floatingTexts.forEach(ft => {
+                ctx.globalAlpha = ft.life;
+                ctx.fillStyle = ft.color;
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = ft.color;
+                ctx.fillText(ft.text, ft.x, ft.y - (1.0 - ft.life) * 30);
+            });
+            ctx.globalAlpha = 1.0;
+            ctx.shadowBlur = 0;
+
+            // カウントダウン表示
+            if (state === 'countdown') {
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = 'bold 120px Arial';
+                ctx.fillStyle = `rgba(255, 255, 255, ${countdownTimer})`; // タイマーに合わせてフェードアウト
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = 'white';
+                ctx.fillText(countdownValue, width / 2, height / 2 - 120);
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        function loop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            let dt = (timestamp - lastTime) / 1000;
+            lastTime = timestamp;
+
+            // デルタタイムの上限を設定 (タブ移動時などの爆発を防ぐ)
+            if (dt > 0.1) dt = 0.1;
+
+            update(dt);
+            draw();
+
+            requestAnimationFrame(loop);
+        }
+
+        // 初期化実行
+        initGame();
+        requestAnimationFrame(loop);
+
+    </script>
+</body>
+</html>
