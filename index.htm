@@ -98,19 +98,75 @@
             }
         }
 
-        function playTick() {
+        function playTick(comboCount = 0) {
             if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+            // マイナーペンタトニックスケールでメロディを奏でる (A4, C5, D5, E5, G5, A5...)
+            const scale = [440.00, 523.25, 587.33, 659.25, 783.99, 880.00, 1046.50, 1174.66];
+            const freq = scale[comboCount % scale.length];
+
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
             osc.connect(gain);
             gain.connect(audioCtx.destination);
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(800, audioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-            gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.1);
+            
+            // きらびやかな音色
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(freq, now);
+            gain.gain.setValueAtTime(0.4, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+            
+            osc.start(now);
+            osc.stop(now + 0.2);
+        }
+
+        function playBGMNote() {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+
+            // アップテンポなベースライン (A2, A2, A3, A2, D3, D3, E3, E3)
+            const bassNotes = [110, 110, 220, 110, 146.83, 146.83, 164.81, 164.81];
+            
+            // ベース音
+            const bassOsc = audioCtx.createOscillator();
+            const bassGain = audioCtx.createGain();
+            bassOsc.connect(bassGain);
+            bassGain.connect(audioCtx.destination);
+            bassOsc.type = 'square';
+            bassOsc.frequency.setValueAtTime(bassNotes[bgmStep % 8], now);
+            bassGain.gain.setValueAtTime(0.06, now); // 控えめな音量
+            bassGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+            bassOsc.start(now);
+            bassOsc.stop(now + 0.1);
+
+            // ハイハット風ノイズ (裏拍)
+            if (bgmStep % 2 !== 0) {
+                const hatOsc = audioCtx.createOscillator();
+                const hatGain = audioCtx.createGain();
+                hatOsc.connect(hatGain);
+                hatGain.connect(audioCtx.destination);
+                hatOsc.type = 'square';
+                hatOsc.frequency.setValueAtTime(6000, now);
+                hatGain.gain.setValueAtTime(0.03, now);
+                hatGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+                hatOsc.start(now);
+                hatOsc.stop(now + 0.05);
+            } else if (bgmStep % 4 === 0) {
+                // キック風 (4つ打ち)
+                const kickOsc = audioCtx.createOscillator();
+                const kickGain = audioCtx.createGain();
+                kickOsc.connect(kickGain);
+                kickGain.connect(audioCtx.destination);
+                kickOsc.type = 'sine';
+                kickOsc.frequency.setValueAtTime(150, now);
+                kickOsc.frequency.exponentialRampToValueAtTime(0.01, now + 0.1);
+                kickGain.gain.setValueAtTime(0.12, now);
+                kickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                kickOsc.start(now);
+                kickOsc.stop(now + 0.1);
+            }
+
+            bgmStep++;
         }
 
         function playMiss() {
@@ -176,16 +232,20 @@
         let anchorOrb = ORB_FIRE;
         let movingOrb = ORB_ICE;
         
-        let rotationSpeed = 480; // 回転速度（度/秒） - リズムの速さ（320から480に変更して高速化）
+        let BPM = 230; // 速度をBPMで指定
+        let rotationSpeed = BPM * 3; // 回転速度（度/秒）。1拍で180度回転するため BPM * (180/60) = BPM * 3
         let camera = { x: 0, y: 0 };
         let combo = 0;
         let lastTime = 0;
+        
+        // BGM同期用変数
+        let bgmTimer = 0;
+        let bgmStep = 0;
         
         let floatingTexts = [];
         let trails = [];
 
         // ステージの生成 (R:右, D:下, L:左, U:上)
-        // 難易度を上げるため、ステージを大幅に長くし、ジグザグやUターンなどの複雑なルートを追加
         const levelString = "R R R U R U L U R R D R U R R R D D L D R R U R U U R D R D D R R R U R D R U R D R U U L L D D R R R R".split(' ');
 
         function initGame() {
@@ -214,6 +274,9 @@
             camera.x = path[0].x * TILE_SIZE;
             camera.y = path[0].y * TILE_SIZE;
             
+            bgmTimer = 0;
+            bgmStep = 0;
+            
             floatingTexts = [];
             trails = [];
             document.getElementById('combo-counter').innerText = combo;
@@ -236,11 +299,14 @@
                 initAudio();
                 setUI(false, false, false, true);
                 countdownValue = 3;
-                countdownTimer = 1.0;
+                countdownTimer = 0.6; // 1.0から0.6に変更してテンポアップ
                 playCountdownTick();
             } else if (state === 'playing') {
                 setUI(false, false, false, true);
                 playCountdownStart(); // スタート時の音
+                bgmTimer = 0;
+                bgmStep = 0;
+                playBGMNote(); // 最初のビートを鳴らす
             } else if (state === 'gameover') {
                 playMiss();
                 document.getElementById('result-combo').innerText = `コンボ: ${combo}`;
@@ -322,7 +388,7 @@
                     let orbY = cy + Math.sin(targetAngle * Math.PI / 180) * TILE_SIZE;
                     spawnFloatingText(text, color, orbX, orbY - 40);
 
-                    playTick();
+                    playTick(combo); // コンボ数に応じて音階が変わる
                     advanceToNextTile();
                 } else {
                     // 空振り or フライング
@@ -347,7 +413,7 @@
                 if (countdownTimer <= 0) {
                     countdownValue--;
                     if (countdownValue > 0) {
-                        countdownTimer = 1.0;
+                        countdownTimer = 0.6; // 1.0から0.6に変更
                         playCountdownTick();
                     } else {
                         changeState('playing');
@@ -357,6 +423,19 @@
 
             if (state === 'playing') {
                 currentAngle += rotationSpeed * dt;
+
+                // BGMの再生制御 (8分音符間隔で刻む)
+                bgmTimer += dt;
+                let eighthNoteTime = (60 / BPM) / 2;
+                if (bgmTimer >= eighthNoteTime) {
+                    // タブ非アクティブ時などの大幅な遅延はリセットしてスキップ
+                    if (bgmTimer > eighthNoteTime * 4) {
+                        bgmTimer = 0;
+                    } else {
+                        bgmTimer -= eighthNoteTime;
+                        playBGMNote();
+                    }
+                }
 
                 // 通り過ぎたかチェック (ミス)
                 if (currentAngle > targetAngle + 45) {
@@ -500,7 +579,7 @@
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.font = 'bold 120px Arial';
-                ctx.fillStyle = `rgba(255, 255, 255, ${countdownTimer})`; // タイマーに合わせてフェードアウト
+                ctx.fillStyle = `rgba(255, 255, 255, ${countdownTimer / 0.6})`; // 0.6秒基準でフェードアウトするように調整
                 ctx.shadowBlur = 20;
                 ctx.shadowColor = 'white';
                 ctx.fillText(countdownValue, width / 2, height / 2 - 120);
